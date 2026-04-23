@@ -408,6 +408,17 @@ wss.on('connection', (ws) => {
     data: { message: 'Connected to SEA Flight Tracker', airport: 'KSEA' }
   }));
 
+  // Send a flight within 2-3 seconds of connecting
+  setTimeout(() => {
+    if (ws.readyState === WebSocket.OPEN && realFlightQueue.length > 0) {
+      const flight = realFlightQueue.shift();
+      flight.timestamp = Date.now();
+      const icon = flight.type === 'arrival' ? '🛬' : '🛫';
+      console.log(`✈️  ${icon} ${flight.flightNumber} | ${flight.airline} (${flight.capacity} pax) | ${flight.origin} → ${flight.destination} [REAL]`);
+      ws.send(JSON.stringify({ type: 'flight', data: flight }));
+    }
+  }, 2000 + Math.floor(Math.random() * 1000));
+
   // Send cached posts with staggered timing so they appear naturally
   recentPosts.forEach((post, i) => {
     setTimeout(() => {
