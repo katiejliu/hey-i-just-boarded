@@ -21,9 +21,17 @@
   const TWEET_DELAY_SLOW = isMobile ? 10000 : 3000;
   const TWEET_DELAY_FAST = isMobile ? 10000 : 800;
   const tweetQueue = [];
+  const seenTweetIds = new Set();
   let tweetProcessing = false;
 
   function queueTweet(data) {
+    // Deduplicate by URI or by normalized text content
+    const id = data.uri || data.url || '';
+    const textKey = (data.text || '').toLowerCase().trim().slice(0, 100);
+    if (id && seenTweetIds.has(id)) return;
+    if (textKey && seenTweetIds.has(textKey)) return;
+    if (id) seenTweetIds.add(id);
+    if (textKey) seenTweetIds.add(textKey);
     tweetQueue.push(data);
     processTweetQueue();
   }
