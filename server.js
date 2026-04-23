@@ -327,130 +327,166 @@ async function fetchRealFlights() {
   
   const token = await getOpenSkyToken();
   if (!token) {
-    console.log('⚠️  OpenSky auth failed, falling back to simulation');
+    console.log('⚠️  OpenSky auth failed');
     return;
   }
   
-  // Query window: data has ~2h delay, so fetch 2-6 hours ago on first load
   const now = Math.floor(Date.now() / 1000);
-  const end = lastOpenSkyEnd || (now - 7200); // start from 2h ago
-  const begin = lastOpenSkyEnd ? (end - 7200) : (end - 14400); // first load: 4h window, then 2h
-  lastOpenSkyEnd = end;
-  
   const headers = { 'Authorization': `Bearer ${token}` };
   
-  try {
-    const [arrivalsRes, departuresRes] = await Promise.all([
-      fetch(`${OPENSKY_API_URL}/arrival?airport=KSEA&begin=${begin}&end=${end}`, { headers }),
-      fetch(`${OPENSKY_API_URL}/departure?airport=KSEA&begin=${begin}&end=${end}`, { headers }),
-    ]);
+  if (!lastOpenSkyEnd) {
+    // First load: fetch multiple 2h windows covering 15h-27h ago (data has ~7h delay)
+    console.log('🛩️  OpenSky: loading historical flights...');
+    const windowEnd = now - 54000; // 15h ago (earliest available data)
+    const windowStart = windowEnd - 43200; // 12h before that (covers full busy day)
     
-    let arrivals = [], departures = [];
-    if (arrivalsRes.ok) arrivals = await arrivalsRes.json();
-    if (departuresRes.ok) departures = await departuresRes.json();
-    
-    if (!Array.isArray(arrivals)) arrivals = [];
-    if (!Array.isArray(departures)) departures = [];
-    
-    let newCount = 0;
-    
-    for (const f of arrivals) {
-      const uid = `${f.icao24}-${f.lastSeen}`;
-      if (seenFlightIds.has(uid)) continue;
-      seenFlightIds.add(uid);
-      
-      const capacity = estimateCapacity(f.callsign);
-      if (capacity === 0) continue; // skip cargo
-      
-      const parsed = parseCallsign(f.callsign);
-      const origin = f.estDepartureAirport || 'UNK';
-      
-      realFlightQueue.push({
-        id: uid,
-        flightNumber: parsed.flightNumber,
-        airline: parsed.airline,
-        airlineCode: parsed.airlineCode,
-        aircraftType: 'B738',
-        aircraftName: `${parsed.airline} aircraft`,
-        capacity,
-        type: 'arrival',
-        origin: origin.replace(/^K/, ''), // KORD → ORD
-        destination: 'SEA',
-        bearing: AIRPORT_BEARING[origin.replace(/^K/, '')] || Math.random() * 360,
-        timestamp: f.lastSeen * 1000,
-        gate: `${['A', 'B', 'C', 'D', 'N', 'S'][Math.floor(Math.random() * 6)]}${Math.floor(Math.random() * 20 + 1)}`,
-        isReal: true,
-      });
-      newCount++;
+    // Break into 2h chunks (API max per request)
+    for (let e = windowEnd; e > windowStart; e -= 7200) {
+      const b = e - 7200;
+      try {
+        const [arrivalsRes, departuresRes] = await Promise.all([
+          fetch(`${OPENSKY_API_URL}/arrival?airport=KSEA&begin=${b}&end=${e}`, { headers }),
+          fetch(`${OPENSKY_API_URL}/departure?airport=KSEA&begin=${b}&end=${e}`, { headers }),
+        ]);
+        
+        let arrivals = arrivalsRes.ok ? await arrivalsRes.json() : [];
+        let departures = departuresRes.ok ? await departuresRes.json() : [];
+        if (!Array.isArray(arrivals)) arrivals = [];
+        if (!Array.isArray(departures)) departures = [];
+        
+        processFlights(arrivals, departures);
+        
+        // Small delay between batches to be nice to the API
+        await new Promise(r => setTimeout(r, 500));
+      } catch (err) {
+        console.error('🛩️  OpenSky batch error:', err.message);
+      }
     }
     
-    for (const f of departures) {
-      const uid = `${f.icao24}-${f.firstSeen}`;
-      if (seenFlightIds.has(uid)) continue;
-      seenFlightIds.add(uid);
-      
-      const capacity = estimateCapacity(f.callsign);
-      if (capacity === 0) continue;
-      
-      const parsed = parseCallsign(f.callsign);
-      const dest = f.estArrivalAirport || 'UNK';
-      
-      realFlightQueue.push({
-        id: uid,
-        flightNumber: parsed.flightNumber,
-        airline: parsed.airline,
-        airlineCode: parsed.airlineCode,
-        aircraftType: 'B738',
-        aircraftName: `${parsed.airline} aircraft`,
-        capacity,
-        type: 'departure',
-        origin: 'SEA',
-        destination: dest.replace(/^K/, ''),
-        bearing: AIRPORT_BEARING[dest.replace(/^K/, '')] || Math.random() * 360,
-        timestamp: f.firstSeen * 1000,
-        gate: `${['A', 'B', 'C', 'D', 'N', 'S'][Math.floor(Math.random() * 6)]}${Math.floor(Math.random() * 20 + 1)}`,
-        isReal: true,
-      });
-      newCount++;
-    }
-    
-    // Sort by timestamp so we replay in order
+    lastOpenSkyEnd = windowEnd;
     realFlightQueue.sort((a, b) => a.timestamp - b.timestamp);
+    console.log(`🛩️  OpenSky: ${realFlightQueue.length} real flights loaded`);
     
-    console.log(`🛩️  OpenSky: fetched ${arrivals.length} arrivals + ${departures.length} departures, ${newCount} new flights queued (${realFlightQueue.length} total in queue)`);
-    
-    // Prune seen set if too large
-    if (seenFlightIds.size > 5000) {
-      const arr = [...seenFlightIds];
-      arr.splice(0, 2000);
-      seenFlightIds.clear();
-      arr.forEach(id => seenFlightIds.add(id));
+  } else {
+    // Subsequent polls: check if new data is available
+    const begin = lastOpenSkyEnd;
+    const end = begin + 7200;
+    if (end > now - 54000) {
+      // Can't get data fresher than ~15h ago; reload historical if queue low
+      if (realFlightQueue.length < 20) {
+        lastOpenSkyEnd = 0;
+        return fetchRealFlights();
+      }
+      return;
     }
     
-  } catch (err) {
-    console.error('🛩️  OpenSky fetch error:', err.message);
+    try {
+      const [arrivalsRes, departuresRes] = await Promise.all([
+        fetch(`${OPENSKY_API_URL}/arrival?airport=KSEA&begin=${begin}&end=${end}`, { headers }),
+        fetch(`${OPENSKY_API_URL}/departure?airport=KSEA&begin=${begin}&end=${end}`, { headers }),
+      ]);
+      
+      let arrivals = arrivalsRes.ok ? await arrivalsRes.json() : [];
+      let departures = departuresRes.ok ? await departuresRes.json() : [];
+      if (!Array.isArray(arrivals)) arrivals = [];
+      if (!Array.isArray(departures)) departures = [];
+      
+      const newCount = processFlights(arrivals, departures);
+      lastOpenSkyEnd = end;
+      realFlightQueue.sort((a, b) => a.timestamp - b.timestamp);
+      if (newCount > 0) console.log(`🛩️  OpenSky: ${newCount} new flights (${realFlightQueue.length} in queue)`);
+    } catch (err) {
+      console.error('🛩️  OpenSky fetch error:', err.message);
+    }
   }
 }
 
-// Drip-feed real flights or fall back to simulation
+function processFlights(arrivals, departures) {
+  let newCount = 0;
+  
+  for (const f of arrivals) {
+    const uid = `${f.icao24}-${f.lastSeen}`;
+    if (seenFlightIds.has(uid)) continue;
+    seenFlightIds.add(uid);
+    
+    const capacity = estimateCapacity(f.callsign);
+    if (capacity === 0) continue;
+    
+    const parsed = parseCallsign(f.callsign);
+    const origin = (f.estDepartureAirport || 'UNK').replace(/^K/, '');
+    
+    realFlightQueue.push({
+      id: uid,
+      flightNumber: parsed.flightNumber,
+      airline: parsed.airline,
+      airlineCode: parsed.airlineCode,
+      aircraftType: 'B738',
+      aircraftName: `${parsed.airline} aircraft`,
+      capacity,
+      type: 'arrival',
+      origin,
+      destination: 'SEA',
+      bearing: AIRPORT_BEARING[origin] || Math.random() * 360,
+      timestamp: f.lastSeen * 1000,
+      gate: `${['A', 'B', 'C', 'D', 'N', 'S'][Math.floor(Math.random() * 6)]}${Math.floor(Math.random() * 20 + 1)}`,
+      isReal: true,
+    });
+    newCount++;
+  }
+  
+  for (const f of departures) {
+    const uid = `${f.icao24}-${f.firstSeen}`;
+    if (seenFlightIds.has(uid)) continue;
+    seenFlightIds.add(uid);
+    
+    const capacity = estimateCapacity(f.callsign);
+    if (capacity === 0) continue;
+    
+    const parsed = parseCallsign(f.callsign);
+    const dest = (f.estArrivalAirport || 'UNK').replace(/^K/, '');
+    
+    realFlightQueue.push({
+      id: uid,
+      flightNumber: parsed.flightNumber,
+      airline: parsed.airline,
+      airlineCode: parsed.airlineCode,
+      aircraftType: 'B738',
+      aircraftName: `${parsed.airline} aircraft`,
+      capacity,
+      type: 'departure',
+      origin: 'SEA',
+      destination: dest,
+      bearing: AIRPORT_BEARING[dest] || Math.random() * 360,
+      timestamp: f.firstSeen * 1000,
+      gate: `${['A', 'B', 'C', 'D', 'N', 'S'][Math.floor(Math.random() * 6)]}${Math.floor(Math.random() * 20 + 1)}`,
+      isReal: true,
+    });
+    newCount++;
+  }
+  
+  if (seenFlightIds.size > 5000) {
+    const arr = [...seenFlightIds];
+    arr.splice(0, 2000);
+    seenFlightIds.clear();
+    arr.forEach(id => seenFlightIds.add(id));
+  }
+  
+  return newCount;
+}
+
+// Drip-feed real flights only — no simulation
 function scheduleNextFlight() {
   const interval = getNextInterval();
   setTimeout(() => {
-    let flight;
-    
     if (realFlightQueue.length > 0) {
-      flight = realFlightQueue.shift();
-      flight.timestamp = Date.now(); // update to current time for display
+      const flight = realFlightQueue.shift();
+      flight.timestamp = Date.now();
+      const icon = flight.type === 'arrival' ? '🛬' : '🛫';
+      console.log(`✈️  ${icon} ${flight.flightNumber} | ${flight.airline} (${flight.capacity} pax) | ${flight.origin} → ${flight.destination} [REAL]`);
+      broadcastFlight(flight);
     } else {
-      // Simulation fallback
-      const type = Math.random() < 0.52 ? 'arrival' : 'departure';
-      flight = generateFlight(type);
+      console.log('⏳ Waiting for more real flight data...');
     }
-    
-    const icon = flight.type === 'arrival' ? '🛬' : '🛫';
-    const realTag = flight.isReal ? ' [REAL]' : ' [SIM]';
-    console.log(`✈️  ${icon} ${flight.flightNumber} | ${flight.airline} (${flight.capacity} pax) | ${flight.origin} → ${flight.destination}${realTag}`);
-    broadcastFlight(flight);
     scheduleNextFlight();
   }, interval);
 }
