@@ -80,6 +80,14 @@ h1 {
   color: rgba(200, 208, 224, 0.8);
 }
 
+.mobile-hint {
+  display: none;
+  font-family: 'Patrick Hand', cursive;
+  font-size: 12px;
+  color: rgba(200, 208, 224, 0.35);
+  margin-top: 4px;
+}
+
 .project-description p {
   font-family: 'Patrick Hand', cursive;
   font-size: 15px;
@@ -550,6 +558,7 @@ main {
   .tweet-bubble { max-width: 160px; font-size: 12px; }
   .canvas-wrap { height: 30vh; }
   .about-toggle { display: inline-block; }
+  .mobile-hint { display: block; }
   .about-content { display: none; }
   .about-content.open { display: block; }
   .project-description { padding: 0 20px; }
