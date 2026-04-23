@@ -369,8 +369,10 @@ async function fetchAirlabsFlights() {
 }
 
 // Drip-feed real flights
+let isFirstFlight = true;
 function scheduleNextFlight() {
-  const interval = getNextInterval();
+  const interval = isFirstFlight ? Math.floor(Math.random() * 2000 + 2000) : getNextInterval(); // 2-4s for first
+  isFirstFlight = false;
   setTimeout(() => {
     if (realFlightQueue.length > 0) {
       const flight = realFlightQueue.shift();
