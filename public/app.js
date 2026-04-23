@@ -16,7 +16,10 @@
   let flights = [], tweets = [], tweetCount = 0;
   const sessionStart = Date.now();
   const TWEET_DELAY_START = 3000; // wait 3s before showing any tweets
-  const TWEET_THROTTLE_PERIOD = 15000; // one-at-a-time for first 15s
+  const isMobile = window.innerWidth <= 768;
+  const TWEET_THROTTLE_PERIOD = 15000;
+  const TWEET_DELAY_SLOW = isMobile ? 10000 : 3000;
+  const TWEET_DELAY_FAST = isMobile ? 10000 : 800;
   const tweetQueue = [];
   let tweetProcessing = false;
 
@@ -36,7 +39,7 @@
     const data = tweetQueue.shift();
     showTweetBubble(data);
     addTweetToLog(data);
-    const delay = elapsed < TWEET_THROTTLE_PERIOD ? 3000 : 800;
+    const delay = elapsed < TWEET_THROTTLE_PERIOD ? TWEET_DELAY_SLOW : TWEET_DELAY_FAST;
     setTimeout(() => {
       tweetProcessing = false;
       processTweetQueue();
