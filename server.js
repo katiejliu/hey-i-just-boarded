@@ -325,11 +325,13 @@ async function getOpenSkyToken() {
 async function fetchRealFlights() {
   if (!useRealFlights) return;
   
+  console.log('🛩️  OpenSky: fetching token...');
   const token = await getOpenSkyToken();
   if (!token) {
-    console.log('⚠️  OpenSky auth failed');
+    console.log('⚠️  OpenSky auth failed — check credentials');
     return;
   }
+  console.log('🛩️  OpenSky: token acquired');
   
   const now = Math.floor(Date.now() / 1000);
   const headers = { 'Authorization': `Bearer ${token}` };
@@ -351,6 +353,8 @@ async function fetchRealFlights() {
         
         let arrivals = arrivalsRes.ok ? await arrivalsRes.json() : [];
         let departures = departuresRes.ok ? await departuresRes.json() : [];
+        if (!arrivalsRes.ok) console.log(`  ⚠️ arrivals ${b}-${e}: ${arrivalsRes.status}`);
+        if (!departuresRes.ok) console.log(`  ⚠️ departures ${b}-${e}: ${departuresRes.status}`);
         if (!Array.isArray(arrivals)) arrivals = [];
         if (!Array.isArray(departures)) departures = [];
         
