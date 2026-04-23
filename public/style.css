@@ -548,7 +548,7 @@ main {
   .flight-entry { flex-wrap: wrap; gap: 6px; }
   .entry-airline, .entry-aircraft { display: none; }
   .tweet-bubble { max-width: 160px; font-size: 12px; }
-  .canvas-wrap { height: 45vh; }
+  .canvas-wrap { height: 30vh; }
   .about-toggle { display: inline-block; }
   .about-content { display: none; }
   .about-content.open { display: block; }
