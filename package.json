@@ -1,0 +1,21 @@
+{
+  "name": "sea-flight-tracker",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "express": "^5.2.1",
+    "node-fetch": "^2.7.0",
+    "topojson-client": "^3.1.0",
+    "twitter-api-v2": "^1.29.0",
+    "world-atlas": "^2.0.2",
+    "ws": "^8.20.0"
+  }
+}
