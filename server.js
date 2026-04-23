@@ -224,22 +224,17 @@ function broadcastFlight(flight) {
   });
 }
 
-// ── OpenSky Network Integration (Live State Vectors) ─────────────────
-const OPENSKY_USERNAME = process.env.OPENSKY_USERNAME;
-const OPENSKY_PASSWORD = process.env.OPENSKY_PASSWORD;
-console.log(`🔑 Env check: OPENSKY_USERNAME=${OPENSKY_USERNAME ? 'SET' : 'MISSING'}, OPENSKY_PASSWORD=${OPENSKY_PASSWORD ? 'SET' : 'MISSING'}`);
-const OPENSKY_STATES_URL = 'https://opensky-network.org/api/states/all';
+// ── Airlabs Flight API (Real-Time) ───────────────────────────────────
+const AIRLABS_API_KEY = process.env.AIRLABS_API_KEY;
+const AIRLABS_URL = 'https://airlabs.co/api/v9/flights';
+console.log(`🔑 Env check: AIRLABS_API_KEY=${AIRLABS_API_KEY ? 'SET' : 'MISSING'}`);
 
-// SEA airport: 47.449, -122.309 — bounding box ~30nm around it
-const SEA_LAT = 47.449, SEA_LON = -122.309;
-const SEA_BBOX = { lamin: 46.9, lamax: 48.0, lomin: -123.0, lomax: -121.5 };
+let useRealFlights = !!AIRLABS_API_KEY;
+const seenFlightIds = new Set();
+let realFlightQueue = [];
 
-const trackedAircraft = new Map(); // icao24 -> { callsign, wasOnGround, lastSeen }
-const announcedFlights = new Set(); // prevent duplicate announcements
-let useRealFlights = !!OPENSKY_USERNAME;
-
-// Callsign → airline mapping
-const CALLSIGN_AIRLINES = {
+// ICAO airline code → name
+const AIRLINE_NAMES = {
   ASA: 'Alaska Airlines', DAL: 'Delta Air Lines', UAL: 'United Airlines',
   AAL: 'American Airlines', SWA: 'Southwest Airlines', JBU: 'JetBlue',
   NKS: 'Spirit Airlines', FFT: 'Frontier Airlines', HAL: 'Hawaiian Airlines',
@@ -248,200 +243,159 @@ const CALLSIGN_AIRLINES = {
   AFR: 'Air France', DLH: 'Lufthansa', ACA: 'Air Canada',
   SKW: 'SkyWest Airlines', RPA: 'Republic Airways', ENY: 'Envoy Air',
   PDT: 'Piedmont Airlines', CPA: 'Cathay Pacific', JAL: 'Japan Airlines',
-  KEN: 'Kenmore Air', RFS: 'Region Air',
-  FDX: 'FedEx', UPS: 'UPS Airlines',
 };
 
-const DEFAULT_CAPACITY = 180;
+// Aircraft type → approximate capacity
+const AIRCRAFT_CAPACITY = {
+  B738: 189, B739: 189, B37M: 172, B38M: 178, B39M: 204,
+  A320: 180, A321: 220, A319: 156, A20N: 186, A21N: 220,
+  B752: 200, B753: 243, B763: 269, B772: 314, B773: 396, B77W: 365,
+  B788: 248, B789: 290, B78X: 318, A332: 293, A333: 293, A359: 325,
+  A388: 525, E175: 76, E170: 72, CRJ7: 70, CRJ9: 76, BCS1: 133, BCS3: 160,
+};
 
-function parseCallsign(callsign) {
-  const cs = (callsign || '').trim();
-  if (!cs) return { airline: 'Unknown', flightNumber: 'UNK000', airlineCode: 'UNK' };
-  
-  const prefix3 = cs.substring(0, 3).toUpperCase();
-  const numPart = cs.substring(3).trim();
-  const airline = CALLSIGN_AIRLINES[prefix3];
-  
-  if (airline) {
-    const icaoToIata = {
-      ASA: 'AS', DAL: 'DL', UAL: 'UA', AAL: 'AA', SWA: 'WN', JBU: 'B6',
-      NKS: 'NK', FFT: 'F9', HAL: 'HA', SCX: 'SY', QXE: 'QX', ANA: 'NH',
-      KAL: 'KE', EVA: 'BR', CAL: 'CI', BAW: 'BA', AFR: 'AF', DLH: 'LH',
-      ACA: 'AC', SKW: 'OO', RPA: 'YX', ENY: 'MQ', CPA: 'CX', JAL: 'JL',
-    };
-    const iata = icaoToIata[prefix3] || prefix3.substring(0, 2);
-    return { airline, flightNumber: `${iata}${numPart}`, airlineCode: iata };
-  }
-  
-  return { airline: 'Unknown', flightNumber: cs, airlineCode: cs.substring(0, 2) };
-}
+const CARGO_AIRLINES = ['FDX', 'UPS', 'GTI', 'ABX', 'ATN', 'CKK', 'CLX'];
 
-function estimateCapacity(callsign) {
-  const cs = (callsign || '').trim().toUpperCase();
-  const prefix = cs.substring(0, 3);
-  
-  // Skip cargo airlines and private aircraft (N-reg with no airline prefix)
-  if (['FDX', 'UPS', 'GTI', 'ABX', 'ATN', 'CKK'].includes(prefix)) return 0;
-  if (cs.startsWith('N') && /^N\d/.test(cs)) return 0; // Private N-registered
-  
-  // Regional carriers
-  if (['SKW', 'RPA', 'ENY', 'PDT', 'QXE', 'KEN', 'RFS'].includes(prefix)) {
-    return 76 + Math.floor(Math.random() * 14);
-  }
-  
-  // Widebody routes
-  if (['ANA', 'KAL', 'EVA', 'CAL', 'CPA', 'JAL', 'BAW', 'AFR', 'DLH'].includes(prefix)) {
-    return 250 + Math.floor(Math.random() * 100);
-  }
-  
+function getCapacity(aircraftIcao, airlineIcao) {
+  if (CARGO_AIRLINES.includes(airlineIcao)) return 0;
+  if (AIRCRAFT_CAPACITY[aircraftIcao]) return AIRCRAFT_CAPACITY[aircraftIcao];
+  // Regional carriers default
+  if (['SKW', 'RPA', 'ENY', 'PDT', 'QXE'].includes(airlineIcao)) return 76 + Math.floor(Math.random() * 14);
+  // Widebody carriers default
+  if (['ANA', 'KAL', 'EVA', 'CAL', 'CPA', 'JAL', 'BAW', 'AFR', 'DLH'].includes(airlineIcao)) return 250 + Math.floor(Math.random() * 100);
   return 160 + Math.floor(Math.random() * 60);
 }
 
-// Distance from SEA in degrees (rough)
-function distFromSea(lat, lon) {
-  return Math.sqrt((lat - SEA_LAT) ** 2 + (lon - SEA_LON) ** 2);
-}
-
-// Determine bearing from SEA based on aircraft heading
-function bearingFromTrack(track) {
-  // Use the aircraft's actual heading as its bearing
-  return track || Math.random() * 360;
-}
-
-async function pollLiveFlights() {
+async function fetchAirlabsFlights() {
   if (!useRealFlights) return;
   
-  const auth = 'Basic ' + Buffer.from(`${OPENSKY_USERNAME}:${OPENSKY_PASSWORD}`).toString('base64');
-  
   try {
-    const url = `${OPENSKY_STATES_URL}?lamin=${SEA_BBOX.lamin}&lamax=${SEA_BBOX.lamax}&lomin=${SEA_BBOX.lomin}&lomax=${SEA_BBOX.lomax}`;
-    const res = await fetch(url, { headers: { Authorization: auth } });
+    const [arrRes, depRes] = await Promise.all([
+      fetch(`${AIRLABS_URL}?arr_icao=KSEA&api_key=${AIRLABS_API_KEY}`),
+      fetch(`${AIRLABS_URL}?dep_icao=KSEA&api_key=${AIRLABS_API_KEY}`),
+    ]);
     
-    if (!res.ok) {
-      console.error(`🛩️  OpenSky states error: ${res.status}`);
+    if (!arrRes.ok || !depRes.ok) {
+      console.error(`✈️  Airlabs error: arr=${arrRes.status} dep=${depRes.status}`);
       return;
     }
     
-    const data = await res.json();
-    const states = data.states || [];
+    const arrData = await arrRes.json();
+    const depData = await depRes.json();
     
-    // State vector indices:
-    // 0=icao24, 1=callsign, 2=origin_country, 5=longitude, 6=latitude,
-    // 7=baro_altitude, 8=on_ground, 9=velocity, 10=true_track
+    if (arrData.error) { console.error('✈️  Airlabs arr error:', arrData.error); return; }
+    if (depData.error) { console.error('✈️  Airlabs dep error:', depData.error); return; }
     
-    const currentIcaos = new Set();
+    const arrivals = arrData.response || [];
+    const departures = depData.response || [];
+    let newCount = 0;
     
-    for (const s of states) {
-      const icao24 = s[0];
-      const callsign = (s[1] || '').trim();
-      const lat = s[6], lon = s[5];
-      const onGround = s[8];
-      const altitude = s[7] || 0;
-      const track = s[10] || 0;
+    for (const f of arrivals) {
+      const id = f.flight_icao || f.hex;
+      if (!id || seenFlightIds.has(id + '-arr')) continue;
+      seenFlightIds.add(id + '-arr');
       
-      if (!callsign || !lat || !lon) continue;
-      currentIcaos.add(icao24);
+      const airlineIcao = f.airline_icao || '';
+      const capacity = getCapacity(f.aircraft_icao, airlineIcao);
+      if (capacity === 0) continue;
       
-      const dist = distFromSea(lat, lon);
-      const isNearSea = dist < 0.15; // ~10nm from airport
-      
-      const prev = trackedAircraft.get(icao24);
-      
-      if (prev) {
-        // ARRIVAL: was airborne, now on ground near SEA
-        if (!prev.wasOnGround && onGround && isNearSea) {
-          const key = `arr-${icao24}-${Date.now()}`;
-          if (!announcedFlights.has(callsign + '-arr')) {
-            announcedFlights.add(callsign + '-arr');
-            const capacity = estimateCapacity(callsign);
-            if (capacity > 0) {
-              const parsed = parseCallsign(callsign);
-              const flight = {
-                id: key,
-                flightNumber: parsed.flightNumber,
-                airline: parsed.airline,
-                airlineCode: parsed.airlineCode,
-                aircraftType: 'B738',
-                aircraftName: `${parsed.airline} aircraft`,
-                capacity,
-                type: 'arrival',
-                origin: 'UNK',
-                destination: 'SEA',
-                bearing: (track + 180) % 360, // came from opposite direction
-                timestamp: Date.now(),
-                gate: `${['A', 'B', 'C', 'D', 'N', 'S'][Math.floor(Math.random() * 6)]}${Math.floor(Math.random() * 20 + 1)}`,
-                isReal: true,
-              };
-              const icon = '🛬';
-              console.log(`✈️  ${icon} ${flight.flightNumber} | ${flight.airline} (${capacity} pax) | LANDED [REAL-TIME]`);
-              broadcastFlight(flight);
-            }
-          }
-        }
-        
-        // DEPARTURE: was on ground near SEA, now airborne
-        if (prev.wasOnGround && !onGround && prev.wasNearSea) {
-          const key = `dep-${icao24}-${Date.now()}`;
-          if (!announcedFlights.has(callsign + '-dep')) {
-            announcedFlights.add(callsign + '-dep');
-            const capacity = estimateCapacity(callsign);
-            if (capacity > 0) {
-              const parsed = parseCallsign(callsign);
-              const flight = {
-                id: key,
-                flightNumber: parsed.flightNumber,
-                airline: parsed.airline,
-                airlineCode: parsed.airlineCode,
-                aircraftType: 'B738',
-                aircraftName: `${parsed.airline} aircraft`,
-                capacity,
-                type: 'departure',
-                origin: 'SEA',
-                destination: 'UNK',
-                bearing: track,
-                timestamp: Date.now(),
-                gate: `${['A', 'B', 'C', 'D', 'N', 'S'][Math.floor(Math.random() * 6)]}${Math.floor(Math.random() * 20 + 1)}`,
-                isReal: true,
-              };
-              const icon = '🛫';
-              console.log(`✈️  ${icon} ${flight.flightNumber} | ${flight.airline} (${capacity} pax) | DEPARTED [REAL-TIME]`);
-              broadcastFlight(flight);
-            }
-          }
-        }
-      }
-      
-      // Update tracking
-      trackedAircraft.set(icao24, { callsign, wasOnGround: onGround, wasNearSea: isNearSea, lastSeen: Date.now() });
+      const origin = (f.dep_iata || f.dep_icao || 'UNK').replace(/^K/, '');
+      realFlightQueue.push({
+        id: id + '-arr',
+        flightNumber: f.flight_iata || f.flight_icao || id,
+        airline: AIRLINE_NAMES[airlineIcao] || airlineIcao || 'Unknown',
+        airlineCode: f.airline_iata || airlineIcao,
+        aircraftType: f.aircraft_icao || 'B738',
+        aircraftName: f.aircraft_icao || 'aircraft',
+        capacity,
+        type: 'arrival',
+        origin,
+        destination: 'SEA',
+        bearing: AIRPORT_BEARING[origin] || (f.dir ? (f.dir + 180) % 360 : Math.random() * 360),
+        timestamp: Date.now(),
+        gate: `${['A', 'B', 'C', 'D', 'N', 'S'][Math.floor(Math.random() * 6)]}${Math.floor(Math.random() * 20 + 1)}`,
+        isReal: true,
+        status: f.status,
+      });
+      newCount++;
     }
     
-    // Clean up aircraft that left the area
-    for (const [icao, info] of trackedAircraft) {
-      if (!currentIcaos.has(icao) && Date.now() - info.lastSeen > 120000) {
-        trackedAircraft.delete(icao);
-      }
+    for (const f of departures) {
+      const id = f.flight_icao || f.hex;
+      if (!id || seenFlightIds.has(id + '-dep')) continue;
+      seenFlightIds.add(id + '-dep');
+      
+      const airlineIcao = f.airline_icao || '';
+      const capacity = getCapacity(f.aircraft_icao, airlineIcao);
+      if (capacity === 0) continue;
+      
+      const dest = (f.arr_iata || f.arr_icao || 'UNK').replace(/^K/, '');
+      realFlightQueue.push({
+        id: id + '-dep',
+        flightNumber: f.flight_iata || f.flight_icao || id,
+        airline: AIRLINE_NAMES[airlineIcao] || airlineIcao || 'Unknown',
+        airlineCode: f.airline_iata || airlineIcao,
+        aircraftType: f.aircraft_icao || 'B738',
+        aircraftName: f.aircraft_icao || 'aircraft',
+        capacity,
+        type: 'departure',
+        origin: 'SEA',
+        destination: dest,
+        bearing: AIRPORT_BEARING[dest] || f.dir || Math.random() * 360,
+        timestamp: Date.now(),
+        gate: `${['A', 'B', 'C', 'D', 'N', 'S'][Math.floor(Math.random() * 6)]}${Math.floor(Math.random() * 20 + 1)}`,
+        isReal: true,
+        status: f.status,
+      });
+      newCount++;
     }
     
-    // Prune announced flights after 30 min
-    if (announcedFlights.size > 500) {
-      announcedFlights.clear();
+    // Shuffle so arrivals and departures are interleaved
+    for (let i = realFlightQueue.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [realFlightQueue[i], realFlightQueue[j]] = [realFlightQueue[j], realFlightQueue[i]];
     }
     
-    console.log(`🛩️  OpenSky: tracking ${trackedAircraft.size} aircraft near SEA (${states.length} in area)`);
+    console.log(`✈️  Airlabs: ${arrivals.length} arrivals + ${departures.length} departures, ${newCount} new queued (${realFlightQueue.length} total)`);
+    
+    // Prune seen set periodically
+    if (seenFlightIds.size > 2000) {
+      seenFlightIds.clear();
+    }
     
   } catch (err) {
-    console.error('🛩️  OpenSky poll error:', err.message);
+    console.error('✈️  Airlabs fetch error:', err.message);
   }
 }
 
-// Start live polling
+// Drip-feed real flights
+function scheduleNextFlight() {
+  const interval = getNextInterval();
+  setTimeout(() => {
+    if (realFlightQueue.length > 0) {
+      const flight = realFlightQueue.shift();
+      flight.timestamp = Date.now();
+      const icon = flight.type === 'arrival' ? '🛬' : '🛫';
+      console.log(`✈️  ${icon} ${flight.flightNumber} | ${flight.airline} (${flight.capacity} pax) | ${flight.origin} → ${flight.destination} [REAL]`);
+      broadcastFlight(flight);
+    } else {
+      console.log('⏳ Queue empty, waiting for next Airlabs poll...');
+    }
+    scheduleNextFlight();
+  }, interval);
+}
+
+// Poll Airlabs: 1000 req/month free = ~2 req per 45 min poll (arr+dep)
+// That's ~32 polls/day × 31 days = 992 requests
 if (useRealFlights) {
-  console.log('🛩️  OpenSky: REAL-TIME mode (live state vectors)');
-  // Poll every 15 seconds (registered users: 5s rate limit)
-  pollLiveFlights();
-  setInterval(pollLiveFlights, 15000);
+  console.log('✈️  Airlabs: REAL-TIME mode');
+  fetchAirlabsFlights().then(() => {
+    console.log(`✈️  Starting flight feed (${realFlightQueue.length} flights queued)...`);
+    scheduleNextFlight();
+  });
+  setInterval(fetchAirlabsFlights, 45 * 60 * 1000); // every 45 min
 } else {
-  console.log('🛩️  OpenSky: no credentials — no flights will be shown');
+  console.log('✈️  Airlabs: no API key — no flights will be shown');
 }
 
 // WebSocket connection handling
