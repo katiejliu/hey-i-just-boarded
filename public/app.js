@@ -353,14 +353,29 @@
       </div>
     `;
 
-    bubble.querySelector('.tweet-bubble-close').addEventListener('click', (e) => {
-      e.stopPropagation();
-      bubble.style.animation = 'bubbleFadeOut 0.5s ease-in forwards';
+    function dismissBubble(b) {
+      b.style.animation = 'bubbleFadeOut 0.5s ease-in forwards';
       setTimeout(() => {
-        bubble.remove();
-        const idx = activeBubbles.indexOf(bubble);
+        b.remove();
+        const idx = activeBubbles.indexOf(b);
         if (idx > -1) activeBubbles.splice(idx, 1);
       }, 500);
+    }
+
+    bubble.querySelector('.tweet-bubble-close').addEventListener('click', (e) => {
+      e.stopPropagation();
+      dismissBubble(bubble);
+    });
+
+    // Double-tap to dismiss on mobile
+    let lastTap = 0;
+    bubble.addEventListener('touchend', (e) => {
+      const now = Date.now();
+      if (now - lastTap < 300) {
+        e.preventDefault();
+        dismissBubble(bubble);
+      }
+      lastTap = now;
     });
 
     // Make draggable
