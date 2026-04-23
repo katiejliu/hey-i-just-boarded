@@ -1,6 +1,16 @@
 (function () {
   'use strict';
 
+  // About toggle for mobile
+  const aboutToggle = document.getElementById('aboutToggle');
+  const aboutContent = document.getElementById('aboutContent');
+  if (aboutToggle && aboutContent) {
+    aboutToggle.addEventListener('click', () => {
+      aboutContent.classList.toggle('open');
+      aboutToggle.textContent = aboutContent.classList.contains('open') ? 'close' : 'about';
+    });
+  }
+
   let netPax = 0, arrivalCount = 0, departureCount = 0, arrivedPax = 0, departedPax = 0;
   let currentFilter = 'all';
   let flights = [], tweets = [], tweetCount = 0;

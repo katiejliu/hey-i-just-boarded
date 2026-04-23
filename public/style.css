@@ -63,6 +63,23 @@ h1 {
   text-align: center;
 }
 
+.about-toggle {
+  display: none;
+  background: none;
+  border: 1px solid rgba(255,255,255,0.15);
+  color: rgba(200, 208, 224, 0.6);
+  font-family: 'Patrick Hand', cursive;
+  font-size: 14px;
+  padding: 4px 16px;
+  border-radius: 20px;
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+.about-toggle:hover {
+  border-color: rgba(255,255,255,0.3);
+  color: rgba(200, 208, 224, 0.8);
+}
+
 .project-description p {
   font-family: 'Patrick Hand', cursive;
   font-size: 15px;
@@ -530,4 +547,8 @@ main {
   .flight-entry { flex-wrap: wrap; gap: 6px; }
   .entry-airline, .entry-aircraft { display: none; }
   .tweet-bubble { max-width: 180px; }
+  .about-toggle { display: inline-block; }
+  .about-content { display: none; }
+  .about-content.open { display: block; }
+  .project-description { padding: 0 20px; }
 }
