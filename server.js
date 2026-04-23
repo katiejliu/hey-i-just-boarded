@@ -227,6 +227,7 @@ function broadcastFlight(flight) {
 // ── OpenSky Network Integration (Live State Vectors) ─────────────────
 const OPENSKY_USERNAME = process.env.OPENSKY_USERNAME;
 const OPENSKY_PASSWORD = process.env.OPENSKY_PASSWORD;
+console.log(`🔑 Env check: OPENSKY_USERNAME=${OPENSKY_USERNAME ? 'SET' : 'MISSING'}, OPENSKY_PASSWORD=${OPENSKY_PASSWORD ? 'SET' : 'MISSING'}`);
 const OPENSKY_STATES_URL = 'https://opensky-network.org/api/states/all';
 
 // SEA airport: 47.449, -122.309 — bounding box ~30nm around it
