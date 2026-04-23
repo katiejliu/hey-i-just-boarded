@@ -550,7 +550,7 @@ main {
   header { flex-direction: column; gap: 8px; padding: 14px 16px; }
   h1 { font-size: 36px; }
   .counter-number { font-size: 52px; }
-  .people-counter { top: 30%; }
+  .people-counter { top: 35%; }
   main { padding: 10px 10px 40px; }
   .stats-strip { gap: 14px; flex-wrap: wrap; }
   .flight-entry { flex-wrap: wrap; gap: 6px; }
