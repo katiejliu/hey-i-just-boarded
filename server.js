@@ -498,10 +498,14 @@ function scheduleNextFlight() {
 // Poll OpenSky every 5 minutes for new flight data
 if (useRealFlights) {
   console.log('🛩️  OpenSky: LIVE mode (polling real flights)');
-  fetchRealFlights(); // initial fetch
+  // Wait for initial fetch to complete before starting the drip-feed
+  fetchRealFlights().then(() => {
+    console.log('🛩️  Starting flight feed...');
+    scheduleNextFlight();
+  });
   setInterval(fetchRealFlights, 5 * 60 * 1000);
 } else {
-  console.log('🛩️  OpenSky: no credentials, using simulation only');
+  console.log('🛩️  OpenSky: no credentials — no flights will be shown');
 }
 
 // WebSocket connection handling
@@ -739,10 +743,9 @@ setInterval(pollReddit, 20000);
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`\n🛫 SEA Flight Tracker running at http://localhost:${PORT}`);
-  console.log('   Simulating real-time flights at Seattle-Tacoma International Airport');
+  console.log('   Tracking real flights at Seattle-Tacoma International Airport');
   console.log('   🦋 Bluesky: LIVE (no API key needed)');
   console.log('   🟠 Reddit: LIVE (no API key needed)\n');
-  scheduleNextFlight();
   // Initial polls — stagger first few queries
   pollBluesky();
   setTimeout(pollBluesky, 3000);
